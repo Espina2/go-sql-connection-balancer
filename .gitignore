@@ -1,0 +1,5 @@
+.idea
+.docker/master/data
+.docker/slave/data
+.docker/slave-2/data
+vendor

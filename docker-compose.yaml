@@ -1,0 +1,55 @@
+version: '3.9'
+services:
+  mysql-master:
+    image: bitnami/mysql:latest
+    container_name: mysql-master
+    restart: unless-stopped
+    env_file: .docker/master/.env
+    cap_add:
+      - ALL
+    volumes:
+      - ./.docker/master/data:/bitnami/mysql/data
+      - ./.docker/master/my.cnf:/opt/bitnami/mysql/conf/my.cnf
+    environment:
+      - TZ:${TZ}
+      - MYSQL_USER:${MYSQL_USER}
+      - MYSQL_PASSWORD:${MYSQL_PASSWORD}
+      - MYSQL_ROOT_PASSWORD:${MYSQL_PASSWORD}
+    ports:
+      - "3306:3306"
+
+  mysql-slave:
+    image: bitnami/mysql:latest
+    container_name: mysql-slave
+    restart: unless-stopped
+    env_file: .docker/slave/.env
+    cap_add:
+      - ALL
+    volumes:
+      - ./.docker/slave/data:/bitnami/mysql/data
+      - ./.docker/slave/my.cnf:/opt/bitnami/mysql/conf/my.cnf
+    environment:
+      - TZ:${TZ}
+      - MYSQL_USER:${MYSQL_USER}
+      - MYSQL_PASSWORD:${MYSQL_PASSWORD}
+      - MYSQL_ROOT_PASSWORD:${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3307:3306"
+
+  mysql-slave-2:
+    image: bitnami/mysql:latest
+    container_name: mysql-slave-2
+    restart: unless-stopped
+    env_file: .docker/slave-2/.env
+    cap_add:
+      - ALL
+    volumes:
+      - ./.docker/slave-2/data:/bitnami/mysql/data
+      - ./.docker/slave-2/my.cnf:/opt/bitnami/mysql/conf/my.cnf
+    environment:
+      - TZ:${TZ}
+      - MYSQL_USER:${MYSQL_USER}
+      - MYSQL_PASSWORD:${MYSQL_PASSWORD}
+      - MYSQL_ROOT_PASSWORD:${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3308:3306"

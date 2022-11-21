@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
-	_ "github.com/go-sql-driver/mysql"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
@@ -17,15 +19,15 @@ func main() {
 		StrategyType: RoundRobin,
 		Nodes: []*Node{
 			{
-				address: "root:Mastermaster123@tcp(docker.for.mac.localhost:3306)/mysql",
+				address: "root:Mastermaster123@tcp(127.0.0.1:3306)/mysql",
 				name:    "master",
 			},
 			{
-				address: "root:slaveslave123@tcp(docker.for.mac.localhost:3307)/mysql",
+				address: "root:slaveslave123@tcp(127.0.0.1:3307)/mysql",
 				name:    "slave",
 			},
 			{
-				address: "root:slaveslave123@tcp(docker.for.mac.localhost:3308)/mysql",
+				address: "root:slaveslave123@tcp(127.0.0.1:3308)/mysql",
 				name:    "slave-2",
 			},
 		},
@@ -49,7 +51,7 @@ func main() {
 		case <-ticker.C:
 			_, err := balancer.ExecContext(ctx, "SHOW PROCESSLIST;")
 			if err != nil {
-				panic(err)
+				fmt.Printf("%w\n", err)
 			}
 
 		case <-stop:

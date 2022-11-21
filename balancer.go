@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
-	"github.com/sethvargo/go-retry"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
+	"github.com/sethvargo/go-retry"
 )
 
 type StrategyType string
@@ -45,7 +46,7 @@ type (
 
 	// Strategy represents the methods a strategy need's to implement
 	Strategy interface {
-		Balance() *Node
+		Balance() (*Node, error)
 		RemoveNode(node *Node)
 		AddNode(node *Node)
 	}
@@ -69,14 +70,17 @@ func NewRoundRobinPolicy(connections Nodes) RoundRobinPolicy {
 	return RoundRobinPolicy{connections, 0, sync.RWMutex{}}
 }
 
-func (p *RoundRobinPolicy) Balance() *Node {
+func (p *RoundRobinPolicy) Balance() (*Node, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	if len(p.nodes) == 0 {
+		return nil, fmt.Errorf("empty set of nodes")
+	}
 	n := atomic.AddUint32(&p.next, 1)
 	node := p.nodes[(int(n)-1)%len(p.nodes)]
 
 	spew.Dump(node.name)
-	return node
+	return node, nil
 }
 
 func (p *RoundRobinPolicy) RemoveNode(node *Node) {
@@ -141,6 +145,7 @@ func NewBalancer(config *Config) (*Balancer, error) {
 		sqlConn.SetConnMaxLifetime(config.Connection.ConnMaxLifetime)
 
 		if errPing := sqlConn.Ping(); errPing != nil {
+			spew.Dump(errPing)
 			node.conn = sqlConn
 			failedNodes = append(failedNodes, node)
 			continue
@@ -173,7 +178,11 @@ func (m Balancer) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, er
 func (m Balancer) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	var tx *sql.Tx
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node := m.policy.Balance()
+		node, err := m.policy.Balance()
+		if err != nil {
+			return err
+		}
+
 		txt, err := node.conn.BeginTx(ctx, opts)
 		if err != nil {
 			if err == driver.ErrBadConn {
@@ -202,7 +211,11 @@ func (m Balancer) ExecContext(ctx context.Context, query string, args ...any) (s
 func (m Balancer) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	var res sql.Result
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node := m.policy.Balance()
+		node, err := m.policy.Balance()
+		if err != nil {
+			return err
+		}
+
 		result, err := node.conn.ExecContext(ctx, query, args...)
 
 		if err != nil {
@@ -232,7 +245,11 @@ func (m Balancer) QueryContext(ctx context.Context, query string, args ...any) (
 func (m Balancer) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	var res *sql.Rows
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node := m.policy.Balance()
+		node, err := m.policy.Balance()
+		if err != nil {
+			return err
+		}
+
 		rows, err := node.conn.QueryContext(ctx, query, args...)
 
 		if err != nil {
@@ -262,7 +279,11 @@ func (m Balancer) QueryRowContext(ctx context.Context, query string, args ...any
 func (m Balancer) queryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	var res *sql.Row
 	_ = retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node := m.policy.Balance()
+		node, errBalance := m.policy.Balance()
+		if errBalance != nil {
+			return errBalance
+		}
+
 		row := node.conn.QueryRowContext(ctx, query, args...)
 		err := row.Err()
 		res = row

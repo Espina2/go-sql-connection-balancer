@@ -13,6 +13,10 @@ import (
 	"github.com/sethvargo/go-retry"
 )
 
+const (
+	RetryReconnectDelayInSeconds = 5
+)
+
 type StrategyType string
 
 const (
@@ -99,7 +103,7 @@ func (p *RoundRobinPolicy) RemoveNode(node *Node) {
 }
 
 func watchNodeForReconnect(node *Node, strategy Strategy) {
-	t := time.NewTicker(time.Second * 5)
+	t := time.NewTicker(time.Second * RetryReconnectDelayInSeconds)
 
 	for range t.C {
 		err := node.conn.Ping()
@@ -119,8 +123,7 @@ func (p *RoundRobinPolicy) AddNode(node *Node) {
 }
 
 func NewPolicy(nodes Nodes, policyType StrategyType) (Strategy, error) {
-	switch policyType {
-	case RoundRobin:
+	if policyType == RoundRobin {
 		r := NewRoundRobinPolicy(nodes)
 		return &r, nil
 	}
@@ -145,11 +148,9 @@ func NewBalancer(config *Config) (*Balancer, error) {
 		sqlConn.SetConnMaxLifetime(config.Connection.ConnMaxLifetime)
 
 		if errPing := sqlConn.Ping(); errPing != nil {
-			spew.Dump(errPing)
 			node.conn = sqlConn
 			failedNodes = append(failedNodes, node)
 			continue
-			//return nil, errPing
 		}
 
 		node.conn = sqlConn

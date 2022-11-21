@@ -44,14 +44,15 @@ func main() {
 
 	ctx := context.Background()
 
-	ticker := time.NewTicker(time.Millisecond * 100)
+	tickerInterval := 100
+	ticker := time.NewTicker(time.Millisecond * time.Duration(tickerInterval))
 
 	for {
 		select {
 		case <-ticker.C:
 			_, err := balancer.ExecContext(ctx, "SHOW PROCESSLIST;")
 			if err != nil {
-				fmt.Printf("%w\n", err)
+				fmt.Printf("%v\n", err)
 			}
 
 		case <-stop:

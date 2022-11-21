@@ -1,5 +1,5 @@
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://choosealicense.com/licenses/mit/)
-
+[![codecov](https://codecov.io/github/Espina2/go-sql-connection-balancer/branch/master/graph/badge.svg?token=24XOG5Z25K)](https://codecov.io/github/Espina2/go-sql-connection-balancer)
 # Golang SQL Load Balancer
 
 This project aims to give support to a client to load balance connections

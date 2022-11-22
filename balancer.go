@@ -4,20 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"fmt"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/sethvargo/go-retry"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
 	RetryReconnectDelayInSeconds = 5
 )
 
-type StrategyType string
-
-const (
-	RoundRobin StrategyType = "ROUND_ROBIN"
+var (
+	ErrFailedConnAllNodes = errors.New("failed connecting to all nodes")
+	ErrNoNodesProvided    = errors.New("empty slices of nodes")
 )
 
 type (
@@ -30,6 +30,10 @@ type (
 
 	Nodes []*Node
 
+	// StrategyFunc represent a factory that return a new Strategy
+	// the main role for this func is for users extend new strategies as needed
+	StrategyFunc func(nodes Nodes) (Strategy, error)
+
 	// Connection represents the Connection config for the Nodes
 	Connection struct {
 		MaxOpenConnections int
@@ -40,32 +44,31 @@ type (
 
 	// Config holds the Balancer configuration
 	Config struct {
-		Nodes        Nodes
-		StrategyType StrategyType
-		Connection   Connection
+		Nodes      Nodes
+		Strategy   StrategyFunc
+		Connection Connection
 	}
 
 	// Balancer represents SQL Load Balancer and wraps sql.ExecerContext and sql.QueryerContext compatible methods
 	// All methods exposed are balanced following the Strategy provided
 	Balancer struct {
-		nodes    Nodes
-		strategy Strategy
+		nodes      Nodes
+		strategy   Strategy
+		errorGroup errgroup.Group
 	}
 )
 
-func NewStrategy(nodes Nodes, strategyType StrategyType) (Strategy, error) {
-	if strategyType == RoundRobin {
-		return NewRoundRobinStrategy(nodes)
+// NewBalancer create a new SQL Load Balancer with automatic connection retrier for unavailable
+// nodes. When we failed to connect to all nodes, we fail with the error of the first node
+func NewBalancer(config *Config) (*Balancer, error) {
+	if len(config.Nodes) == 0 {
+		return nil, ErrNoNodesProvided
 	}
 
-	return nil, fmt.Errorf("invalid strategy provided %v", strategyType)
-}
-
-// NewBalancer create a new SQL Load Balancer
-func NewBalancer(config *Config) (*Balancer, error) {
 	var conns []*Node
 	var failedNodes []*Node
-	balancer := Balancer{nodes: conns}
+	var failedNodesErr []error
+	balancer := Balancer{nodes: conns, errorGroup: errgroup.Group{}}
 
 	for _, node := range config.Nodes {
 		sqlConn, errSQL := sql.Open(config.Connection.Driver, node.Address)
@@ -80,6 +83,7 @@ func NewBalancer(config *Config) (*Balancer, error) {
 		if errPing := sqlConn.Ping(); errPing != nil {
 			node.conn = sqlConn
 			failedNodes = append(failedNodes, node)
+			failedNodesErr = append(failedNodesErr, errPing)
 			continue
 		}
 
@@ -87,26 +91,34 @@ func NewBalancer(config *Config) (*Balancer, error) {
 		balancer.nodes = append(balancer.nodes, node)
 	}
 
-	pol, polErr := NewStrategy(balancer.nodes, config.StrategyType)
-	if polErr != nil {
-		return nil, polErr
+	if len(failedNodes) == len(config.Nodes) {
+		return nil, errors.Wrap(failedNodesErr[0], ErrFailedConnAllNodes.Error())
 	}
 
-	balancer.strategy = pol
+	st, stErr := config.Strategy(balancer.nodes)
+	if stErr != nil {
+		return nil, stErr
+	}
+
+	balancer.strategy = st
 
 	for i := range failedNodes {
-		go watchNodeForReconnect(failedNodes[i], pol)
+		nodecp := failedNodes[i]
+		balancer.errorGroup.Go(func() error {
+			watchNodeForReconnect(nodecp, st)
+			return nil
+		})
 	}
 
 	return &balancer, nil
 }
 
 // BeginTx wrap a *sql.BeginTx
-func (m Balancer) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+func (m *Balancer) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	return m.beginTx(ctx, opts)
 }
 
-func (m Balancer) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+func (m *Balancer) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	var tx *sql.Tx
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
 		node, err := m.strategy.Balance()
@@ -135,11 +147,11 @@ func (m Balancer) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, er
 }
 
 // ExecContext wrap a *sql.ExecContext
-func (m Balancer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+func (m *Balancer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return m.execContext(ctx, query, args...)
 }
 
-func (m Balancer) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+func (m *Balancer) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	var res sql.Result
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
 		node, err := m.strategy.Balance()
@@ -169,11 +181,11 @@ func (m Balancer) execContext(ctx context.Context, query string, args ...any) (s
 }
 
 // QueryContext wrap a *sql.QueryContext
-func (m Balancer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+func (m *Balancer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return m.queryContext(ctx, query, args...)
 }
 
-func (m Balancer) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+func (m *Balancer) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	var res *sql.Rows
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
 		node, err := m.strategy.Balance()
@@ -203,11 +215,11 @@ func (m Balancer) queryContext(ctx context.Context, query string, args ...any) (
 }
 
 // QueryRowContext wrap a *sql.QueryRowContext
-func (m Balancer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (m *Balancer) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return m.queryRowContext(ctx, query, args...)
 }
 
-func (m Balancer) queryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (m *Balancer) queryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	var res *sql.Row
 	_ = retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
 		node, errBalance := m.strategy.Balance()
@@ -233,22 +245,8 @@ func (m Balancer) queryRowContext(ctx context.Context, query string, args ...any
 	return res
 }
 
-func watchNodeForReconnect(node *Node, strategy Strategy) {
-	t := time.NewTicker(time.Second * RetryReconnectDelayInSeconds)
-
-	for range t.C {
-		err := node.conn.Ping()
-		if err != nil {
-			continue
-		}
-
-		strategy.AddNode(node)
-		break
-	}
-}
-
 // Close the underlaying resources for all Nodes
-func (m Balancer) Close() []error {
+func (m *Balancer) Close() []error {
 	var errs []error
 	for i := range m.nodes {
 		err := m.nodes[i].conn.Close()
@@ -264,4 +262,18 @@ func (m Balancer) Close() []error {
 	}
 
 	return errs
+}
+
+func watchNodeForReconnect(node *Node, strategy Strategy) {
+	t := time.NewTicker(time.Second * RetryReconnectDelayInSeconds)
+
+	for range t.C {
+		err := node.conn.Ping()
+		if err != nil {
+			continue
+		}
+
+		strategy.AddNode(node)
+		break
+	}
 }

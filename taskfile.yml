@@ -1,0 +1,12 @@
+version: '3'
+
+tasks:
+  lint:
+    cmds:
+      - golangci-lint run --modules-download-mode vendor '--timeout=5m' '--out-format=line-number' '--tests=false'
+
+  test:
+    cmds:
+      - GODEBUG=netdns=go go test -mod=vendor -race -failfast -coverprofile=test.cover -run=${RUN} ./...
+      - go tool cover -func=test.cover
+      - rm -f test.cover

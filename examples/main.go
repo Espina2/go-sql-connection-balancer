@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	balancer "github.com/Espina2/go-sql-connection-balancer"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	balancer "github.com/Espina2/go-sql-connection-balancer"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -17,7 +18,9 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	bal, err := balancer.NewBalancer(&balancer.Config{
-		StrategyType: balancer.RoundRobin,
+		Strategy: func(nodes balancer.Nodes) (balancer.Strategy, error) {
+			return balancer.NewRoundRobinStrategy(nodes)
+		},
 		Nodes: []*balancer.Node{
 			{
 				Address: "root:Mastermaster123@tcp(127.0.0.1:3306)/mysql",

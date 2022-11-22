@@ -10,8 +10,7 @@ import (
 )
 
 var (
-	ErrNoNodesProvided = errors.New("empty slices of nodes")
-	ErrNoNodesLeft     = errors.New("no nodes left for balancing")
+	ErrNoNodesLeft = errors.New("no nodes left for balancing")
 )
 
 type (

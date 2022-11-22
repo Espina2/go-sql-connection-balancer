@@ -1,15 +1,12 @@
-package main
+package balancer
 
 import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
-	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/sethvargo/go-retry"
 )
 
@@ -27,8 +24,8 @@ type (
 	// Node represents a SQL node
 	Node struct {
 		conn    *sql.DB
-		name    string
-		address string
+		Name    string
+		Address string
 	}
 
 	Nodes []*Node
@@ -48,87 +45,20 @@ type (
 		Connection   Connection
 	}
 
-	// Strategy represents the methods a strategy need's to implement
-	Strategy interface {
-		Balance() (*Node, error)
-		RemoveNode(node *Node)
-		AddNode(node *Node)
-	}
-
-	// RoundRobinPolicy implements a Round Robin policy
-	RoundRobinPolicy struct {
-		nodes Nodes
-		next  uint32
-		lock  sync.RWMutex
-	}
-
 	// Balancer represents SQL Load Balancer and wraps sql.ExecerContext and sql.QueryerContext compatible methods
 	// All methods exposed are balanced following the Strategy provided
 	Balancer struct {
-		nodes  Nodes
-		policy Strategy
+		nodes    Nodes
+		strategy Strategy
 	}
 )
 
-func NewRoundRobinPolicy(connections Nodes) RoundRobinPolicy {
-	return RoundRobinPolicy{connections, 0, sync.RWMutex{}}
-}
-
-func (p *RoundRobinPolicy) Balance() (*Node, error) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	if len(p.nodes) == 0 {
-		return nil, fmt.Errorf("empty set of nodes")
-	}
-	n := atomic.AddUint32(&p.next, 1)
-	node := p.nodes[(int(n)-1)%len(p.nodes)]
-
-	spew.Dump(node.name)
-	return node, nil
-}
-
-func (p *RoundRobinPolicy) RemoveNode(node *Node) {
-	p.lock.Lock()
-
-	for i := range p.nodes {
-		if p.nodes[i].name == node.name {
-			copy(p.nodes[i:], p.nodes[i+1:])
-			p.nodes[len(p.nodes)-1] = &Node{}
-			p.nodes = p.nodes[:len(p.nodes)-1]
-
-			go watchNodeForReconnect(node, p)
-		}
-	}
-	p.lock.Unlock()
-}
-
-func watchNodeForReconnect(node *Node, strategy Strategy) {
-	t := time.NewTicker(time.Second * RetryReconnectDelayInSeconds)
-
-	for range t.C {
-		err := node.conn.Ping()
-		if err != nil {
-			continue
-		}
-
-		strategy.AddNode(node)
-		break
-	}
-}
-
-func (p *RoundRobinPolicy) AddNode(node *Node) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	p.nodes = append(p.nodes, node)
-}
-
-func NewPolicy(nodes Nodes, policyType StrategyType) (Strategy, error) {
-	if policyType == RoundRobin {
-		r := NewRoundRobinPolicy(nodes)
-		return &r, nil
+func NewStrategy(nodes Nodes, strategyType StrategyType) (Strategy, error) {
+	if strategyType == RoundRobin {
+		return NewRoundRobinStrategy(nodes)
 	}
 
-	return nil, fmt.Errorf("invalid policy provided %v", policyType)
+	return nil, fmt.Errorf("invalid strategy provided %v", strategyType)
 }
 
 // NewBalancer create a new SQL Load Balancer
@@ -138,7 +68,7 @@ func NewBalancer(config *Config) (*Balancer, error) {
 	balancer := Balancer{nodes: conns}
 
 	for _, node := range config.Nodes {
-		sqlConn, errSQL := sql.Open(config.Connection.Driver, node.address)
+		sqlConn, errSQL := sql.Open(config.Connection.Driver, node.Address)
 		if errSQL != nil {
 			return nil, errSQL
 		}
@@ -157,12 +87,12 @@ func NewBalancer(config *Config) (*Balancer, error) {
 		balancer.nodes = append(balancer.nodes, node)
 	}
 
-	pol, polErr := NewPolicy(balancer.nodes, config.StrategyType)
+	pol, polErr := NewStrategy(balancer.nodes, config.StrategyType)
 	if polErr != nil {
 		return nil, polErr
 	}
 
-	balancer.policy = pol
+	balancer.strategy = pol
 
 	for i := range failedNodes {
 		go watchNodeForReconnect(failedNodes[i], pol)
@@ -179,7 +109,7 @@ func (m Balancer) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, er
 func (m Balancer) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
 	var tx *sql.Tx
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node, err := m.policy.Balance()
+		node, err := m.strategy.Balance()
 		if err != nil {
 			return err
 		}
@@ -187,7 +117,7 @@ func (m Balancer) beginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, er
 		txt, err := node.conn.BeginTx(ctx, opts)
 		if err != nil {
 			if err == driver.ErrBadConn {
-				m.policy.RemoveNode(node)
+				m.strategy.RemoveNode(node)
 				return retry.RetryableError(err)
 			}
 			return err
@@ -212,7 +142,7 @@ func (m Balancer) ExecContext(ctx context.Context, query string, args ...any) (s
 func (m Balancer) execContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	var res sql.Result
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node, err := m.policy.Balance()
+		node, err := m.strategy.Balance()
 		if err != nil {
 			return err
 		}
@@ -221,7 +151,7 @@ func (m Balancer) execContext(ctx context.Context, query string, args ...any) (s
 
 		if err != nil {
 			if err == driver.ErrBadConn {
-				m.policy.RemoveNode(node)
+				m.strategy.RemoveNode(node)
 				return retry.RetryableError(err)
 			}
 			return err
@@ -246,7 +176,7 @@ func (m Balancer) QueryContext(ctx context.Context, query string, args ...any) (
 func (m Balancer) queryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	var res *sql.Rows
 	err := retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node, err := m.policy.Balance()
+		node, err := m.strategy.Balance()
 		if err != nil {
 			return err
 		}
@@ -255,7 +185,7 @@ func (m Balancer) queryContext(ctx context.Context, query string, args ...any) (
 
 		if err != nil {
 			if err == driver.ErrBadConn {
-				m.policy.RemoveNode(node)
+				m.strategy.RemoveNode(node)
 				return retry.RetryableError(err)
 			}
 			return err
@@ -280,7 +210,7 @@ func (m Balancer) QueryRowContext(ctx context.Context, query string, args ...any
 func (m Balancer) queryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	var res *sql.Row
 	_ = retry.Constant(ctx, 1*time.Millisecond, func(ctx context.Context) error {
-		node, errBalance := m.policy.Balance()
+		node, errBalance := m.strategy.Balance()
 		if errBalance != nil {
 			return errBalance
 		}
@@ -291,7 +221,7 @@ func (m Balancer) queryRowContext(ctx context.Context, query string, args ...any
 
 		if err != nil {
 			if err == driver.ErrBadConn {
-				m.policy.RemoveNode(node)
+				m.strategy.RemoveNode(node)
 				return retry.RetryableError(err)
 			}
 			return err
@@ -303,6 +233,20 @@ func (m Balancer) queryRowContext(ctx context.Context, query string, args ...any
 	return res
 }
 
+func watchNodeForReconnect(node *Node, strategy Strategy) {
+	t := time.NewTicker(time.Second * RetryReconnectDelayInSeconds)
+
+	for range t.C {
+		err := node.conn.Ping()
+		if err != nil {
+			continue
+		}
+
+		strategy.AddNode(node)
+		break
+	}
+}
+
 // Close the underlaying resources for all Nodes
 func (m Balancer) Close() []error {
 	var errs []error
@@ -312,6 +256,11 @@ func (m Balancer) Close() []error {
 		if err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	err := m.strategy.Close()
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	return errs

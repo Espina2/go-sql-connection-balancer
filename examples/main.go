@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	balancer "github.com/Espina2/go-sql-connection-balancer"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,23 +16,23 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	balancer, err := NewBalancer(&Config{
-		StrategyType: RoundRobin,
-		Nodes: []*Node{
+	bal, err := balancer.NewBalancer(&balancer.Config{
+		StrategyType: balancer.RoundRobin,
+		Nodes: []*balancer.Node{
 			{
-				address: "root:Mastermaster123@tcp(127.0.0.1:3306)/mysql",
-				name:    "master",
+				Address: "root:Mastermaster123@tcp(127.0.0.1:3306)/mysql",
+				Name:    "master",
 			},
 			{
-				address: "root:slaveslave123@tcp(127.0.0.1:3307)/mysql",
-				name:    "slave",
+				Address: "root:slaveslave123@tcp(127.0.0.1:3307)/mysql",
+				Name:    "slave",
 			},
 			{
-				address: "root:slaveslave123@tcp(127.0.0.1:3308)/mysql",
-				name:    "slave-2",
+				Address: "root:slaveslave123@tcp(127.0.0.1:3308)/mysql",
+				Name:    "slave-2",
 			},
 		},
-		Connection: Connection{
+		Connection: balancer.Connection{
 			MaxOpenConnections: 50,
 			MaxIdleConns:       5,
 			ConnMaxLifetime:    time.Hour,
@@ -50,13 +51,13 @@ func main() {
 	for {
 		select {
 		case <-ticker.C:
-			_, err := balancer.ExecContext(ctx, "SHOW PROCESSLIST;")
+			_, err := bal.ExecContext(ctx, "SHOW PROCESSLIST;")
 			if err != nil {
 				fmt.Printf("%v\n", err)
 			}
 
 		case <-stop:
-			balancer.Close()
+			bal.Close()
 			break
 		}
 	}

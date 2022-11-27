@@ -74,7 +74,7 @@ func (p *RoundRobinStrategy) RemoveNode(node *Node) {
 		p.nodes = p.nodes[:len(p.nodes)-1]
 
 		p.eg.Go(func() error {
-			watchNodeForReconnect(node, p)
+			WatchNodeForReconnect(node, p)
 			return nil
 		})
 

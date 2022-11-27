@@ -30,9 +30,9 @@ type (
 
 	Nodes []*Node
 
-	// StrategyFunc represent a factory that return a new Strategy
+	// StrategyFactory represent a factory that return a new Strategy
 	// the main role for this func is for users extend new strategies as needed
-	StrategyFunc func(nodes Nodes) (Strategy, error)
+	StrategyFactory func(nodes Nodes) (Strategy, error)
 
 	// Connection represents the Connection config for the Nodes
 	Connection struct {
@@ -45,7 +45,7 @@ type (
 	// Config holds the Balancer configuration
 	Config struct {
 		Nodes      Nodes
-		Strategy   StrategyFunc
+		Strategy   StrategyFactory
 		Connection Connection
 	}
 
@@ -57,6 +57,14 @@ type (
 		errorGroup errgroup.Group
 	}
 )
+
+func NewNode(conn *sql.DB, name, address string) *Node {
+	return &Node{
+		conn:    conn,
+		Name:    name,
+		Address: address,
+	}
+}
 
 // NewBalancer create a new SQL Load Balancer with automatic connection retrier for unavailable
 // nodes. When we failed to connect to all nodes, we fail with the error of the first node
@@ -105,7 +113,7 @@ func NewBalancer(config *Config) (*Balancer, error) {
 	for i := range failedNodes {
 		nodecp := failedNodes[i]
 		balancer.errorGroup.Go(func() error {
-			watchNodeForReconnect(nodecp, st)
+			WatchNodeForReconnect(nodecp, st)
 			return nil
 		})
 	}
@@ -264,7 +272,7 @@ func (m *Balancer) Close() []error {
 	return errs
 }
 
-func watchNodeForReconnect(node *Node, strategy Strategy) {
+func WatchNodeForReconnect(node *Node, strategy Strategy) {
 	t := time.NewTicker(time.Second * RetryReconnectDelayInSeconds)
 
 	for range t.C {

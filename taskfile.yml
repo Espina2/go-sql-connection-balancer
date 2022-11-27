@@ -7,6 +7,10 @@ tasks:
 
   test:
     cmds:
-      - GODEBUG=netdns=go go test -mod=vendor -race -failfast -coverprofile=test.cover -run=${RUN} ./...
+      - GOARCH=amd64 GODEBUG=netdns=go go test -mod=vendor  -failfast -coverprofile=test.cover -run=${RUN} ./...
       - go tool cover -func=test.cover
       - rm -f test.cover
+
+  generate-mocks:
+    cmds:
+      - mockgen -source=strategy.go -destination=internal/mocks/strategy.go

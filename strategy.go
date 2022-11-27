@@ -10,8 +10,7 @@ import (
 )
 
 var (
-	ErrNoNodesProvided = errors.New("empty slices of nodes")
-	ErrNoNodesLeft     = errors.New("no nodes left for balancing")
+	ErrNoNodesLeft = errors.New("no nodes left for balancing")
 )
 
 type (
@@ -75,7 +74,7 @@ func (p *RoundRobinStrategy) RemoveNode(node *Node) {
 		p.nodes = p.nodes[:len(p.nodes)-1]
 
 		p.eg.Go(func() error {
-			watchNodeForReconnect(node, p)
+			WatchNodeForReconnect(node, p)
 			return nil
 		})
 

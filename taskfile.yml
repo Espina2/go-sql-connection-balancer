@@ -1,0 +1,16 @@
+version: '3'
+
+tasks:
+  lint:
+    cmds:
+      - golangci-lint run --modules-download-mode vendor '--timeout=5m' '--out-format=line-number' '--tests=false'
+
+  test:
+    cmds:
+      - GOARCH=amd64 GODEBUG=netdns=go go test -mod=vendor  -failfast -coverprofile=test.cover -run=${RUN} ./...
+      - go tool cover -func=test.cover
+      - rm -f test.cover
+
+  generate-mocks:
+    cmds:
+      - mockgen -source=strategy.go -destination=internal/mocks/strategy.go
